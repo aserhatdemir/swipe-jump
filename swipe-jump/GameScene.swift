@@ -20,14 +20,14 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private var leftWall: SKNode?
     private var rightWall: SKNode?
     
-    // Target tracking
-    private var targets: [SKShapeNode] = []
-    private var hitTargets: Set<SKNode> = []
+    // Manager instances
+    private var audioManager: AudioManager!
+    private var targetManager: TargetManager!
+    private var lineManager: LineManager!
     
     // Line drawing properties
     private var startPoint: CGPoint?
     private var startTouch: UITouch?
-    private var lineNodes: [SKShapeNode] = []
     
     // Game state
     private var isGameStarted = false
@@ -37,18 +37,17 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     // Debug properties
     private var debugMode = false
     
-    // Audio nodes
-    private var bounceSound: SKAction?
-    private var gameOverSound: SKAction?
-    private var targetHitSound: SKAction?
-    
     // MARK: - Lifecycle Methods
     
     override func didMove(to view: SKView) {
+        // Initialize managers
+        audioManager = AudioManager(scene: self)
+        lineManager = LineManager(scene: self)
+        targetManager = TargetManager(scene: self, audioManager: audioManager)
+        
         setupPhysics()
         setupGameElements()
-        setupSounds()
-        setupTargets()
+        targetManager.setupTargets(sceneSize: size)
         
         #if DEBUG
         // Add a debug label for development
@@ -121,29 +120,6 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         
         // Add a background
         setupBackground()
-    }
-    
-    private func setupTargets() {
-        // Create 3 targets on the left wall
-        let leftTargetPositions = [
-            CGPoint(x: 20, y: size.height * 0.25),
-            CGPoint(x: 20, y: size.height * 0.5),
-            CGPoint(x: 20, y: size.height * 0.75)
-        ]
-        
-        // Create 3 targets on the right wall
-        let rightTargetPositions = [
-            CGPoint(x: size.width - 20, y: size.height * 0.25),
-            CGPoint(x: size.width - 20, y: size.height * 0.5),
-            CGPoint(x: size.width - 20, y: size.height * 0.75)
-        ]
-        
-        // Create and add all targets
-        for position in leftTargetPositions + rightTargetPositions {
-            let target = GameElementFactory.createTarget(at: position)
-            addChild(target)
-            targets.append(target)
-        }
     }
     
     private func setupWalls() {
@@ -219,133 +195,6 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         addChild(background)
     }
     
-    private func setupSounds() {
-        // Load sound files - commenting out for now to avoid crashes
-        // bounceSound = SKAction.playSoundFileNamed("bounce.wav", waitForCompletion: false)
-        // gameOverSound = SKAction.playSoundFileNamed("gameover.wav", waitForCompletion: false)
-        // targetHitSound = SKAction.playSoundFileNamed("target_hit.wav", waitForCompletion: false)
-    }
-    
-    // MARK: - Target Handling
-    
-    private func handleTargetHit(_ target: SKNode) {
-        // Don't count targets more than once
-        guard !hitTargets.contains(target) else { return }
-        
-        // Play hit sound
-        if let targetHitSound = targetHitSound {
-            run(targetHitSound)
-        }
-        
-        // Visual feedback for hit
-        let flash = SKAction.sequence([
-            SKAction.fadeAlpha(to: 0.2, duration: 0.1),
-            SKAction.fadeAlpha(to: 1.0, duration: 0.1)
-        ])
-        target.run(SKAction.repeat(flash, count: 3))
-        
-        // Show bonus points
-        let bonusLabel = GameElementFactory.createBonusLabel(
-            at: target.position,
-            points: GameConfig.targetBonusPoints
-        )
-        addChild(bonusLabel)
-        
-        // Animate the bonus label upward and fade out
-        let moveUp = SKAction.moveBy(x: 0, y: 50, duration: 0.8)
-        let fadeOut = SKAction.fadeOut(withDuration: 0.8)
-        let remove = SKAction.removeFromParent()
-        bonusLabel.run(SKAction.sequence([
-            SKAction.group([moveUp, fadeOut]),
-            remove
-        ]))
-        
-        // Add points to score
-        updateScore(by: GameConfig.targetBonusPoints)
-        
-        // Mark target as hit
-        hitTargets.insert(target)
-    }
-    
-    private func resetTargets() {
-        // Reset all targets to be hittable again
-        hitTargets.removeAll()
-        
-        // Restore full opacity for all targets
-        for target in targets {
-            target.alpha = 1.0
-        }
-    }
-    
-    // MARK: - Line Drawing
-    
-    private func createLine(from startPoint: CGPoint, to endPoint: CGPoint) {
-        // Only create a line if the swipe has some minimum length
-        let distance = hypot(endPoint.x - startPoint.x, endPoint.y - startPoint.y)
-        guard distance > GameConfig.minSwipeLength else { return }
-        
-        // Create a simple line shape
-        let line = SKShapeNode()
-        let path = CGMutablePath()
-        path.move(to: .zero)
-        path.addLine(to: CGPoint(x: distance, y: 0))
-        line.path = path
-        
-        // Position and rotate the line to match the swipe
-        line.position = startPoint
-        line.zRotation = atan2(endPoint.y - startPoint.y, endPoint.x - startPoint.x)
-        
-        // Style the line
-        line.strokeColor = .white
-        line.lineWidth = 5
-        line.name = "line"
-        
-        // Physics for the line
-        let physicsBody = SKPhysicsBody(rectangleOf: CGSize(width: distance, height: 5), center: CGPoint(x: distance/2, y: 0))
-        physicsBody.isDynamic = false
-        physicsBody.affectedByGravity = false
-        physicsBody.allowsRotation = false
-        physicsBody.restitution = 0.95 // Increased for more bounce
-        physicsBody.friction = 0.0 // No friction for max bounce
-        physicsBody.categoryBitMask = PhysicsCategories.line
-        physicsBody.contactTestBitMask = PhysicsCategories.ball
-        physicsBody.collisionBitMask = PhysicsCategories.ball
-        
-        line.physicsBody = physicsBody
-        
-        // Add the line to the scene
-        addChild(line)
-        lineNodes.append(line)
-        
-        // Add a fade-out effect
-        let fadeOut = SKAction.fadeOut(withDuration: GameConfig.lineLifetime)
-        let remove = SKAction.removeFromParent()
-        let sequence = SKAction.sequence([fadeOut, remove])
-        
-        line.run(sequence) { [weak self] in
-            if let index = self?.lineNodes.firstIndex(of: line) {
-                self?.lineNodes.remove(at: index)
-            }
-        }
-        
-        // Start the game if it's not already started
-        if !isGameStarted {
-            isGameStarted = true
-            ball?.physicsBody?.isDynamic = true
-            
-            // Give the ball a slight initial impulse for better gameplay
-            ball?.physicsBody?.applyImpulse(CGVector(dx: 0, dy: -5))
-        }
-        
-        // Manage line count to prevent memory issues
-        if lineNodes.count > GameConfig.maxLineCount {
-            if let oldestLine = lineNodes.first {
-                oldestLine.removeFromParent()
-                lineNodes.removeFirst()
-            }
-        }
-    }
-    
     // MARK: - Touch Handling
     
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
@@ -373,8 +222,20 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
               !isGameOver else { return }
         
         let endPoint = touch.location(in: self)
-        createLine(from: startPoint, to: endPoint)
-        updateScore(by: 1) // 1 point for each line drawn
+        let lineCreated = lineManager.createLine(from: startPoint, to: endPoint)
+        
+        if lineCreated {
+            updateScore(by: 1) // 1 point for each line drawn
+            
+            // Start the game if it's not already started
+            if !isGameStarted {
+                isGameStarted = true
+                ball?.physicsBody?.isDynamic = true
+                
+                // Give the ball a slight initial impulse for better gameplay
+                ball?.physicsBody?.applyImpulse(CGVector(dx: 0, dy: -5))
+            }
+        }
         
         // Reset tracking
         self.startPoint = nil
@@ -420,9 +281,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             gameOverLabel.run(scaleAction)
             
             // Play game over sound
-            if let gameOverSound = gameOverSound {
-                run(gameOverSound)
-            }
+            audioManager.playGameOverSound()
             
             // Make sure the ball stops
             ball?.physicsBody?.velocity = .zero
@@ -467,17 +326,14 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         ball?.physicsBody?.isDynamic = false
         
         // Remove all lines
-        for line in lineNodes {
-            line.removeFromParent()
-        }
-        lineNodes.removeAll()
+        lineManager.removeAllLines()
         
         // Reset score
         score = 0
         scoreLabel?.text = "Score: 0"
         
         // Reset targets
-        resetTargets()
+        targetManager.resetTargets(sceneSize: size)
         
         // Remove game over label
         gameOverLabel?.removeFromParent()
@@ -509,7 +365,9 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             let targetNode = (bodyA.categoryBitMask == PhysicsCategories.target) ? bodyA.node : bodyB.node
             
             if let target = targetNode {
-                handleTargetHit(target)
+                targetManager.handleTargetHit(target) { points in
+                    self.updateScore(by: points)
+                }
             }
         }
         
@@ -517,9 +375,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         if collision == PhysicsCategories.ball | PhysicsCategories.line || 
            collision == PhysicsCategories.ball | PhysicsCategories.edge {
             // Play bounce sound
-            if let bounceSound = bounceSound {
-                run(bounceSound)
-            }
+            audioManager.playBounceSound()
             
             // Add a visual effect where the collision occurred
             if let contactPoint = contact.contactPoint as CGPoint? {
